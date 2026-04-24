@@ -1,5 +1,5 @@
 streamlit
-wrds
+yfinance
 pandas
 numpy
 matplotlib
