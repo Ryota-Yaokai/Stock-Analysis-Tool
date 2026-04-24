@@ -1,18 +1,33 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ==========================================
-# 1. Page Configuration
+# 1. Page Configuration & Custom CSS
 # ==========================================
-st.set_page_config(page_title="🇺🇸 US Stock Analyzer", layout="wide")
+st.set_page_config(page_title="Pro Stock Terminal", layout="wide", page_icon="📈")
 
-# Custom CSS to hide the Streamlit menu and footer
+# Custom CSS for a professional "Dark Mode" financial terminal look
 st.markdown("""
     <style>
+    /* Global Background & Font Color */
+    .stApp {
+        background-color: #0e1117;
+        color: #fafafa;
+    }
+    
+    /* Metric Card Styling */
+    div[data-testid="metric-container"] {
+        background-color: #262b30;
+        border: 1px solid #4e525a;
+        padding: 5%;
+        border-radius: 5px;
+        overflow: hidden;
+    }
+
+    /* Hide Hamburger Menu & Footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
@@ -20,151 +35,195 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. Sidebar - Control Panel
-# ==========================================
-st.sidebar.header("⚙️ Control Panel")
-
-ticker_symbol = st.sidebar.text_input("Stock Ticker (US Market)", value="AAPL")
-
-# Date Range Logic
-today = pd.Timestamp.today().normalize()
-one_year_ago = today - pd.DateOffset(years=1)
-
-start_date = st.sidebar.date_input("Start Date", value=one_year_ago, min_value=pd.to_datetime("2010-01-01"))
-end_date = st.sidebar.date_input("End Date", value=today, min_value=start_date)
-
-# Options
-show_candlestick = st.sidebar.checkbox("Show Candlestick Chart", value=True)
-show_benchmark = st.sidebar.checkbox("Compare with S&P 500 (^GSPC)", value=True)
-show_raw_data = st.sidebar.checkbox("Show Raw Data", value=True)
-enable_download = st.sidebar.checkbox("Enable Download", value=True)
-
-# ==========================================
-# 3. Data Loading Function
+# 2. Helper Functions
 # ==========================================
 @st.cache_data(ttl=600)
 def load_data(ticker, start, end):
+    """
+    Downloads stock data from Yahoo Finance.
+    """
     try:
         df = yf.download(ticker, start=start, end=end, progress=False)
         if df.empty:
             return None
-        df.columns = df.columns.get_level_values(0) # Flatten columns
+        # Flatten columns if MultiIndex
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
         return None
 
-# ==========================================
-# 4. Plotting Functions
-# ==========================================
-def plot_candlestick(df, ticker):
-    fig, ax = plt.subplots(figsize=(12, 6))
-    colors = ['red' if row['Close'] >= row['Open'] else 'green' for index, row in df.iterrows()]
-    
-    # Draw candles
-    for i in range(len(df)):
-        ax.vlines(df.index[i], df['Low'][i], df['High'][i], color=colors[i], alpha=0.5)
-        body_height = abs(df['Close'][i] - df['Open'][i])
-        if body_height == 0: body_height = 0.001
-        ax.bar(df.index[i], body_height, bottom=min(df['Open'][i], df['Close'][i]), 
-               color=colors[i], width=0.6, alpha=0.8)
+@st.cache_data(ttl=600)
+def get_stock_info(ticker):
+    """
+    Fetches static stock info like Market Cap, P/E Ratio, etc.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        return stock.info
+    except:
+        return {}
 
-    ax.set_title(f"{ticker} Price Action (Red=Up, Green=Down)", fontsize=16)
-    ax.set_ylabel("Price (USD)")
-    ax.grid(True, linestyle='--', alpha=0.5)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
-    plt.xticks(rotation=45)
-    st.pyplot(fig)
+def calculate_technical_indicators(df):
+    """
+    Calculates Moving Averages and Bollinger Bands.
+    """
+    # Simple Moving Averages
+    df['SMA_20'] = df['Close'].rolling(window=20).mean()
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
 
-# --- 修改后的对比绘图函数 ---
-def plot_comparison(series_stock, series_bench, name_stock, name_bench="S&P 500"):
-    # 1. 合并数据并处理缺失值 (Inner Join 确保日期对齐)
-    df_plot = pd.concat([series_stock, series_bench], axis=1, join='inner').dropna()
-    df_plot.columns = ['Stock', 'Benchmark']
+    # Bollinger Bands
+    std_dev = df['Close'].rolling(window=20).std()
+    df['BB_upper'] = df['SMA_20'] + (std_dev * 2)
+    df['BB_lower'] = df['SMA_20'] - (std_dev * 2)
     
-    if df_plot.empty:
-        st.warning("No overlapping data dates found for comparison.")
-        return
-
-    # 2. 归一化 (Normalize to 100)
-    df_plot['Stock_Norm'] = (df_plot['Stock'] / df_plot['Stock'].iloc[0]) * 100
-    df_plot['Bench_Norm'] = (df_plot['Benchmark'] / df_plot['Benchmark'].iloc[0]) * 100
-
-    # 3. 绘图
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df_plot.index, df_plot['Stock_Norm'], label=f"{name_stock}", color='#1f77b4', linewidth=2)
-    ax.plot(df_plot.index, df_plot['Bench_Norm'], label=f"{name_bench}", color='gray', linestyle='--', alpha=0.7)
-    
-    ax.set_title(f"Performance Comparison (Base 100)", fontsize=16)
-    ax.set_ylabel("Indexed Return (%)")
-    ax.legend()
-    ax.grid(True, linestyle='--', alpha=0.5)
-    
-    st.pyplot(fig)
+    return df
 
 # ==========================================
-# 5. Main Application Logic
+# 3. Plotting Functions
 # ==========================================
-st.title(f"📈 US Stock Analyzer: {ticker_symbol.upper()}")
+def create_chart(df, ticker):
+    """
+    Creates an interactive Plotly chart with Candlesticks, Volume, and Indicators.
+    """
+    # Calculate indicators
+    df = calculate_technical_indicators(df)
 
-if st.button("🔍 Analyze Stock"):
-    with st.spinner(f"Fetching data for {ticker_symbol}..."):
-        # 1. 获取主股票数据
-        stock_df = load_data(ticker_symbol, start_date, end_date)
-        
-        if stock_df is None or stock_df.empty:
-            st.error(f"❌ Failed to load data for **{ticker_symbol}**. Please check the ticker symbol or date range.")
-            st.info("💡 Tip: Ensure the End Date is not in the future (try yesterday) and the Ticker is valid (e.g., AAPL, TSLA).")
-        else:
-            st.success(f"Data loaded successfully for **{ticker_symbol}**")
+    # Create Subplots: 2 rows, shared x-axis
+    # Row 1: Price (Height 70%), Row 2: Volume (Height 30%)
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        row_heights=[0.7, 0.3],
+        subplot_titles=(f'{ticker} Price Action', 'Volume')
+    )
+
+    # 1. Candlestick Trace
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Price',
+            increasing_line_color='#26a69a', # Green
+            decreasing_line_color='#ef5350'  # Red
+        ),
+        row=1, col=1
+    )
+
+    # 2. Moving Averages
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['SMA_20'], line=dict(color='#F6AD6F', width=1), name='SMA 20'),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#6B86B4', width=1), name='SMA 50'),
+        row=1, col=1
+    )
+
+    # 3. Bollinger Bands
+    # Upper Band
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['BB_upper'], line=dict(color='rgba(255, 165, 0, 0.3)', width=1, dash='dot'), name='BB Upper'),
+        row=1, col=1
+    )
+    # Lower Band
+    fig.add_trace(
+        go.Scatter(x=df.index, y=df['BB_lower'], line=dict(color='rgba(255, 165, 0, 0.3)', width=1, dash='dot'), name='BB Lower'),
+        row=1, col=1
+    )
+
+    # 4. Volume Bars
+    colors = ['#26a69a' if row['Close'] >= row['Open'] else '#ef5350' for index, row in df.iterrows()]
+    fig.add_trace(
+        go.Bar(x=df.index, y=df['Volume'], marker_color=colors, opacity=0.5, name='Volume'),
+        row=2, col=1
+    )
+
+    # Update Layout
+    fig.update_layout(
+        template='plotly_dark',
+        xaxis_rangeslider_visible=False, # Hide default range slider to save space
+        height=700,
+        hovermode='x unified',
+        legend=dict(orientation="h", y=1.02, x=0.01)
+    )
+
+    # Axis Labels
+    fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+
+    return fig
+
+# ==========================================
+# 4. Main Application Logic
+# ==========================================
+st.markdown("<h1 style='text-align: center;'>📈 Pro Stock Terminal</h1>", unsafe_allow_html=True)
+
+# --- Sidebar Inputs ---
+with st.sidebar:
+    st.header("🎛️ Control Panel")
+    ticker_symbol = st.text_input("Stock Ticker", value="AAPL").upper()
+    
+    # Date Range
+    end_date = pd.Timestamp.today()
+    start_date = st.date_input("Start Date", value=end_date - pd.DateOffset(years=1))
+    end_date = st.date_input("End Date", value=end_date)
+
+    st.markdown("---")
+    st.markdown("### 📊 Indicators")
+    show_sma = st.checkbox("Show Moving Averages", value=True)
+    show_bb = st.checkbox("Show Bollinger Bands", value=True)
+
+    st.markdown("---")
+    analyze_btn = st.button("🚀 Analyze Market", use_container_width=True)
+
+# --- Main Execution ---
+if analyze_btn:
+    if not ticker_symbol:
+        st.warning("Please enter a ticker symbol.")
+    else:
+        with st.spinner(f"Fetching data for {ticker_symbol}..."):
+            # 1. Load Data
+            df = load_data(ticker_symbol, start_date, end_date)
             
-            # 2. 显示指标
-            latest_price = stock_df['Close'].iloc[-1]
-            start_price = stock_df['Close'].iloc[0]
-            price_change = latest_price - start_price
-            pct_change = (price_change / start_price) * 100
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Latest Price", f"${latest_price:.2f}")
-            col2.metric("Period Change", f"{price_change:.2f}", f"{pct_change:.2f}%")
-            col3.metric("Total Volume", f"{int(stock_df['Volume'].sum()):,}")
-            
-            # 3. K线图
-            if show_candlestick:
-                st.subheader("Price Chart")
-                plot_candlestick(stock_df, ticker_symbol)
-            
-            # 4. 标普500对比 (修复后的逻辑)
-            if show_benchmark:
-                st.subheader("Benchmark Analysis")
-                # 获取标普数据
-                sp500_df = load_data("^GSPC", start_date, end_date)
+            if df is None or df.empty:
+                st.error(f"❌ Could not find data for **{ticker_symbol}**. Please check the symbol.")
+            else:
+                # 2. Get Info (for metrics)
+                info = get_stock_info(ticker_symbol)
                 
-                if sp500_df is not None and not sp500_df.empty:
-                    # 只传递 'Close' 列给绘图函数，避免列名冲突
-                    plot_comparison(
-                        stock_df['Close'], 
-                        sp500_df['Close'], 
-                        ticker_symbol, 
-                        "S&P 500 (^GSPC)"
-                    )
-                else:
-                    st.warning("Could not load S&P 500 data, skipping comparison.")
-            
-            # 5. 原始数据
-            if show_raw_data:
-                st.subheader("Raw Historical Data")
-                st.dataframe(stock_df.sort_index(ascending=False), use_container_width=True)
-                
-                if enable_download:
-                    csv = stock_df.to_csv()
-                    st.download_button(
-                        label="💾 Download Data as CSV",
-                        data=csv,
-                        file_name=f'{ticker_symbol}_history.csv',
-                        mime='text/csv',
-                    )
+                # Extract current price safely
+                current_price = df['Close'].iloc[-1]
+                previous_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
+                change = current_price - previous_close
+                change_pct = (change / previous_close) * 100
+
+                # --- Top Metrics ---
+                m1, m2, m3, m4 = st.columns(4)
+                try:
+                    m1.metric("Current Price", f"${current_price:.2f}", f"{change:.2f} ({change_pct:.2f}%)")
+                    m2.metric("Market Cap", f"${info.get('marketCap', 0)/1e9:.2f}B")
+                    m3.metric("P/E Ratio", f"{info.get('trailingPE', 0):.2f}")
+                    m4.metric("52 Week High", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
+                except Exception as e:
+                    st.warning("Some financial data is missing.")
+
+                st.markdown("---")
+
+                # --- Chart ---
+                fig = create_chart(df, ticker_symbol)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # --- Raw Data Download ---
+                with st.expander("View Raw Data"):
+                    st.dataframe(df.sort_index(ascending=False))
+                    csv = df.to_csv()
+                    st.download_button("Download CSV", csv, f"{ticker_symbol}_data.csv", mime="text/csv")
 
 else:
-    st.info("👈 Please adjust settings in the sidebar and click **Analyze Stock** to begin.")
-    
+    st.info("👈 Enter a ticker symbol in the sidebar and click **Analyze Market** to begin.")
