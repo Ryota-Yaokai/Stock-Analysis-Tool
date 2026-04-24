@@ -1,274 +1,170 @@
-import streamlit as st
-import wrds
+
+import yfinance as yf
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import matplotlib.gridspec as gridspec
-from datetime import date, timedelta
+import numpy as np
 
 # ==========================================
-# 1. Page Configuration & Styling
+# 1. Page Configuration
 # ==========================================
-st.set_page_config(
-    page_title="ProTrade Terminal | WRDS",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="🇺🇸 US Stock Analyzer", layout="wide")
 
-# Custom CSS for Dark Mode
+# Custom CSS to hide the Streamlit menu and footer
 st.markdown("""
-<style>
-    .main { background-color: #121212; color: #E0E0E0; }
-    .stButton>button { background-color: #1c4b82; color: white; border-radius: 4px; width: 100%; }
-    .stButton>button:hover { background-color: #2c5f9e; color: white; }
-    h1, h2, h3 { color: #ffffff; }
-</style>
-""", unsafe_allow_html=True)
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. WRDS Connection (Cached for Speed)
+# 2. Sidebar - Control Panel
 # ==========================================
-@st.cache_resource
-def connect_wrds(user, pwd):
+st.sidebar.header("⚙️ Control Panel")
+
+ticker_symbol = st.sidebar.text_input("Stock Ticker (US Market)", value="AAPL")
+
+# Date Range Logic
+today = pd.Timestamp.today().normalize()
+one_year_ago = today - pd.DateOffset(years=1)
+
+start_date = st.sidebar.date_input("Start Date", value=one_year_ago, min_value=pd.to_datetime("2010-01-01"))
+end_date = st.sidebar.date_input("End Date", value=today, min_value=start_date)
+
+# Options
+show_candlestick = st.sidebar.checkbox("Show Candlestick Chart", value=True)
+show_benchmark = st.sidebar.checkbox("Compare with S&P 500 (^GSPC)", value=True)
+show_raw_data = st.sidebar.checkbox("Show Raw Data", value=True)
+enable_download = st.sidebar.checkbox("Enable Download", value=True)
+
+# ==========================================
+# 3. Data Loading Function
+# ==========================================
+@st.cache_data(ttl=600)
+def load_data(ticker, start, end):
     try:
-        # 增加超时设置，防止网络慢时直接报错
-        conn = wrds.Connection(wrds_username=user, wrds_password=pwd, auto_connect=True)
-        return conn
-    except Exception as e:
+        df = yf.download(ticker, start=start, end=end, progress=False)
+        if df.empty:
+            return None
+        df.columns = df.columns.get_level_values(0) # Flatten columns
+        return df
+    except Exception:
         return None
 
 # ==========================================
-# 3. Sidebar Configuration
+# 4. Plotting Functions
 # ==========================================
-with st.sidebar:
-    st.header("🔐 WRDS Credentials")
+def plot_candlestick(df, ticker):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    colors = ['red' if row['Close'] >= row['Open'] else 'green' for index, row in df.iterrows()]
     
-    # 初始化 Session State
-    if 'user' not in st.session_state:
-        st.session_state.user = ""
-    if 'pwd' not in st.session_state:
-        st.session_state.pwd = ""
+    # Draw candles
+    for i in range(len(df)):
+        ax.vlines(df.index[i], df['Low'][i], df['High'][i], color=colors[i], alpha=0.5)
+        body_height = abs(df['Close'][i] - df['Open'][i])
+        if body_height == 0: body_height = 0.001
+        ax.bar(df.index[i], body_height, bottom=min(df['Open'][i], df['Close'][i]), 
+               color=colors[i], width=0.6, alpha=0.8)
 
-    user_input = st.text_input("Username", value=st.session_state.user)
-    pwd_input = st.text_input("Password", type="password", value=st.session_state.pwd)
+    ax.set_title(f"{ticker} Price Action (Red=Up, Green=Down)", fontsize=16)
+    ax.set_ylabel("Price (USD)")
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
 
-    # 修改点：去掉了 st.rerun()，让程序自然向下运行
-    if st.button("Login to WRDS"):
-        if user_input and pwd_input:
-            st.session_state.user = user_input
-            st.session_state.pwd = pwd_input
-            # 这里不再强制刷新，而是让主程序检测到 state 变化后自动处理
-        else:
-            st.warning("Please enter credentials")
+# --- 修改后的对比绘图函数 ---
+def plot_comparison(series_stock, series_bench, name_stock, name_bench="S&P 500"):
+    # 1. 合并数据并处理缺失值 (Inner Join 确保日期对齐)
+    df_plot = pd.concat([series_stock, series_bench], axis=1, join='inner').dropna()
+    df_plot.columns = ['Stock', 'Benchmark']
+    
+    if df_plot.empty:
+        st.warning("No overlapping data dates found for comparison.")
+        return
 
-    st.divider()
+    # 2. 归一化 (Normalize to 100)
+    df_plot['Stock_Norm'] = (df_plot['Stock'] / df_plot['Stock'].iloc[0]) * 100
+    df_plot['Bench_Norm'] = (df_plot['Benchmark'] / df_plot['Benchmark'].iloc[0]) * 100
 
-    # 只有登录后才显示设置
-    if st.session_state.user:
-        st.header("⚙️ Chart Settings")
-        show_vol = st.checkbox("Show Volume", value=True)
-        show_bench = st.checkbox("Compare S&P 500", value=True)
-        ma_period = st.slider("MA Period", 5, 200, 20)
-    else:
-        st.info("Please login to access settings")
+    # 3. 绘图
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(df_plot.index, df_plot['Stock_Norm'], label=f"{name_stock}", color='#1f77b4', linewidth=2)
+    ax.plot(df_plot.index, df_plot['Bench_Norm'], label=f"{name_bench}", color='gray', linestyle='--', alpha=0.7)
+    
+    ax.set_title(f"Performance Comparison (Base 100)", fontsize=16)
+    ax.set_ylabel("Indexed Return (%)")
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    st.pyplot(fig)
 
 # ==========================================
-# 4. Data Fetching Functions
+# 5. Main Application Logic
 # ==========================================
-@st.cache_data(ttl=3600)
-def fetch_stock_data(_conn, ticker, start_date):
-    # 1. Get Permno first
-    q_permno = f"SELECT permno FROM crsp.msenames WHERE ticker='{ticker}' AND namedt<='{start_date}' ORDER BY namedt DESC LIMIT 1"
-    try:
-        permno_df = _conn.raw_sql(q_permno)
-        if permno_df.empty:
-            return None, "Ticker not found"
-        permno = permno_df.iloc[0]['permno']
+st.title(f"📈 US Stock Analyzer: {ticker_symbol.upper()}")
 
-        # 2. Fetch Data
-        q_data = f"""
-        SELECT date, prc, ret, vol, shrout 
-        FROM crsp.dsf 
-        WHERE permno={permno} AND date >= '{start_date}' 
-        ORDER BY date
-        """
-        df = _conn.raw_sql(q_data, date_cols=['date'])
+if st.button("🔍 Analyze Stock"):
+    with st.spinner(f"Fetching data for {ticker_symbol}..."):
+        # 1. 获取主股票数据
+        stock_df = load_data(ticker_symbol, start_date, end_date)
         
-        if not df.empty:
-            df.set_index('date', inplace=True)
-            df['prc'] = df['prc'].abs() # Handle negative prices
-            return df, None
-        return None, "No data returned"
-    except Exception as e:
-        return None, str(e)
-
-@st.cache_data(ttl=3600)
-def fetch_sp500_data(_conn, start_date):
-    # S&P 500 Index (Permno 934000 in DSI)
-    q_sp = f"""
-    SELECT date, vwretd 
-    FROM crsp.dsi 
-    WHERE date >= '{start_date}' AND vwretd IS NOT NULL 
-    ORDER BY date
-    """
-    try:
-        df = _conn.raw_sql(q_sp, date_cols=['date'])
-        if not df.empty:
-            df.set_index('date', inplace=True)
-            # Calculate Cumulative Return
-            df['cum_ret'] = (1 + df['vwretd']).cumprod() * 100
-            return df['cum_ret']
-        return None
-    except:
-        return None
-
-# ==========================================
-# 5. Main Execution
-# ==========================================
-st.title("📊 ProTrade Terminal")
-
-if not st.session_state.user:
-    st.warning("Please login in the sidebar to start.")
-    st.stop()
-
-# 修改点：增加 Loading 提示，告诉用户正在连接，防止以为卡死
-with st.spinner("🔌 Connecting to WRDS Database... Please wait a moment..."):
-    conn = connect_wrds(st.session_state.user, st.session_state.pwd)
-
-if not conn:
-    st.error("❌ Connection Failed. Please check your username and password.")
-    st.stop()
-
-st.success("✅ Connected to WRDS successfully!")
-
-# Inputs
-col1, col2 = st.columns([1, 2])
-with col1:
-    ticker = st.text_input("Ticker", "AAPL").upper()
-with col2:
-    # 修改点：将默认日期改为 2023年1月1日
-    start_date = st.date_input("Start Date", date(2023, 1, 1))
-
-if st.button("Run Analysis"):
-    with st.spinner(f"Fetching data for {ticker}..."):
-        df_stock, error = fetch_stock_data(conn, ticker, start_date)
-        
-        if df_stock is None:
-            st.error(f"Error: {error}")
+        if stock_df is None or stock_df.empty:
+            st.error(f"❌ Failed to load data for **{ticker_symbol}**. Please check the ticker symbol or date range.")
+            st.info("💡 Tip: Ensure the End Date is not in the future (try yesterday) and the Ticker is valid (e.g., AAPL, TSLA).")
         else:
-            # --- Data Processing ---
-            # Calculate Stock Cumulative Return for Benchmarking
-            df_stock['cum_ret'] = (1 + df_stock['ret']).cumprod() * 100
+            st.success(f"Data loaded successfully for **{ticker_symbol}**")
             
-            # Fetch Benchmark
-            sp_data = None
-            if show_bench:
-                sp_data = fetch_sp500_data(conn, start_date)
-
-            # --- Metrics ---
-            last_price = df_stock['prc'].iloc[-1]
-            last_ret = df_stock['ret'].iloc[-1]
+            # 2. 显示指标
+            latest_price = stock_df['Close'].iloc[-1]
+            start_price = stock_df['Close'].iloc[0]
+            price_change = latest_price - start_price
+            pct_change = (price_change / start_price) * 100
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Price", f"${last_price:.2f}")
-            m2.metric("Daily Ret", f"{last_ret:.2%}")
-            m3.metric("Records", len(df_stock))
-
-            # --- PLOTTING LOGIC (Main Chart) ---
-            st.subheader("Technical Analysis")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Latest Price", f"${latest_price:.2f}")
+            col2.metric("Period Change", f"{price_change:.2f}", f"{pct_change:.2f}%")
+            col3.metric("Total Volume", f"{int(stock_df['Volume'].sum()):,}")
             
-            # 1. Define Axes based on Volume toggle
-            if show_vol:
-                fig = plt.figure(figsize=(15, 9), facecolor='#121212')
-                gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
-                ax1 = fig.add_subplot(gs[0]) # Price Axis
-                ax2 = fig.add_subplot(gs[1], sharex=ax1) # Volume Axis
-            else:
-                fig, ax1 = plt.subplots(figsize=(15, 6), facecolor='#121212')
-                ax2 = None # Explicitly None to avoid errors
-
-            # 2. Plot Price & MA
-            ax1.plot(df_stock.index, df_stock['prc'], label='Price', color='#00ff00', linewidth=1)
+            # 3. K线图
+            if show_candlestick:
+                st.subheader("Price Chart")
+                plot_candlestick(stock_df, ticker_symbol)
             
-            # MA Calculation & Plot
-            ma_val = df_stock['prc'].rolling(window=ma_period).mean()
-            ax1.plot(ma_val.index, ma_val, label=f'MA{ma_period}', color='cyan', linestyle='--', alpha=0.7)
-
-            # 3. Plot Benchmark (S&P 500)
-            if show_bench and sp_data is not None:
-                # Reindex SP data to match stock dates
-                sp_aligned = sp_data.reindex(df_stock.index)
-                ax1.plot(sp_aligned.index, sp_aligned, label='S&P 500 (Cum. Ret)', color='orange', alpha=0.6)
-                ax1.legend(loc='upper left')
-            else:
-                ax1.legend(loc='upper left')
-
-            ax1.set_ylabel("Price / Index")
-            ax1.grid(True, linestyle=':', alpha=0.3)
-            ax1.set_facecolor('#121212')
-
-            # 4. Plot Volume (Only if ax2 exists)
-            if ax2 is not None:
-                colors = ['#00ff00' if r >= 0 else '#ff0000' for r in df_stock['ret']]
-                ax2.bar(df_stock.index, df_stock['vol'], color=colors, alpha=0.5, width=1)
-                ax2.set_ylabel("Volume")
-                ax2.grid(True, linestyle=':', alpha=0.3)
-                ax2.set_facecolor('#121212')
-                # Format Date Axis (Only needed on bottom axis)
-                ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-                ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
-                plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
-            else:
-                # If no volume, format the main axis
-                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-                ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-                plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
-
-            st.pyplot(fig)
-
-            # ==========================================
-            # 6. Raw Data Visualization (New Feature)
-            # ==========================================
-            st.divider()
-            st.subheader("📊 Raw Data Analysis")
+            # 4. 标普500对比 (修复后的逻辑)
+            if show_benchmark:
+                st.subheader("Benchmark Analysis")
+                # 获取标普数据
+                sp500_df = load_data("^GSPC", start_date, end_date)
+                
+                if sp500_df is not None and not sp500_df.empty:
+                    # 只传递 'Close' 列给绘图函数，避免列名冲突
+                    plot_comparison(
+                        stock_df['Close'], 
+                        sp500_df['Close'], 
+                        ticker_symbol, 
+                        "S&P 500 (^GSPC)"
+                    )
+                else:
+                    st.warning("Could not load S&P 500 data, skipping comparison.")
             
-            col_viz1, col_viz2 = st.columns(2)
-            
-            with col_viz1:
-                st.markdown("#### Return Distribution")
-                # Histogram of Returns
-                fig_hist, ax_hist = plt.subplots(figsize=(8, 4), facecolor='#121212')
-                # Drop NaNs
-                returns = df_stock['ret'].dropna()
-                # Plot Histogram
-                ax_hist.hist(returns, bins=50, color='#1f77b4', alpha=0.7, edgecolor='black')
-                ax_hist.axvline(returns.mean(), color='red', linestyle='dashed', linewidth=1, label='Mean')
-                ax_hist.set_title(f"{ticker} Daily Returns Distribution", color='white')
-                ax_hist.set_xlabel("Daily Return", color='gray')
-                ax_hist.set_ylabel("Frequency", color='gray')
-                ax_hist.grid(True, linestyle=':', alpha=0.3)
-                ax_hist.legend()
-                ax_hist.set_facecolor('#121212')
-                ax_hist.tick_params(colors='gray')
-                st.pyplot(fig_hist)
+            # 5. 原始数据
+            if show_raw_data:
+                st.subheader("Raw Historical Data")
+                st.dataframe(stock_df.sort_index(ascending=False), use_container_width=True)
+                
+                if enable_download:
+                    csv = stock_df.to_csv()
+                    st.download_button(
+                        label="💾 Download Data as CSV",
+                        data=csv,
+                        file_name=f'{ticker_symbol}_history.csv',
+                        mime='text/csv',
+                    )
 
-            with col_viz2:
-                st.markdown("#### Recent Data Points")
-                # Show last 10 rows of raw data
-                st.dataframe(df_stock[['prc', 'vol', 'ret']].tail(10))
-
-            # ==========================================
-            # 7. Download CSV (New Feature)
-            # ==========================================
-            st.divider()
-            st.subheader("📥 Data Export")
-            # Prepare CSV
-            csv = df_stock.to_csv().encode('utf-8')
-            st.download_button(
-                label="Download CSV Data",
-                data=csv,
-                file_name=f'{ticker}_historical_data.csv',
-                mime='text/csv',
-            )
+else:
+    st.info("👈 Please adjust settings in the sidebar and click **Analyze Stock** to begin.")
+    
