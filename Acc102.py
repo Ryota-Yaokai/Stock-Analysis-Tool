@@ -219,7 +219,86 @@ if analyze_btn:
                 fig = create_chart(df, ticker_symbol)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- Raw Data Download ---
+                # ==========================================
+                # 5. Qualitative Analysis Module (NEW)
+                # ==========================================
+                st.markdown("---")
+                st.markdown("### 🧠 Qualitative Analysis")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### 🏢 Company Overview")
+                    long_name = info.get('longName', 'N/A')
+                    sector = info.get('sector', 'N/A')
+                    industry = info.get('industry', 'N/A')
+                    country = info.get('country', 'N/A')
+                    
+                    st.write(f"**Name:** {long_name}")
+                    st.write(f"**Sector:** {sector}")
+                    st.write(f"**Industry:** {industry}")
+                    st.write(f"**Headquarters:** {country}")
+
+                    # Business Summary
+                    summary = info.get('longBusinessSummary', 'No description available.')
+                    # Truncate long text for the UI
+                    st.markdown(f"<div style='font-size: 0.9em; line-height: 1.5;'>{summary[:500]}{'...' if len(summary) > 500 else ''}</div>", unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown("#### 📊 Business Segments")
+                    # Segment Data (If Available)
+                    seg_data = info.get('segmentData', None)
+                    if seg_data and 'segments' in seg_data:
+                        # This is a simplified approach; data structure varies
+                        st.write("Segment breakdown data available.")
+                        # Note: Yahoo Finance segment data structure is complex and varies by company.
+                        # For a stable UI, we simply indicate availability here.
+                    else:
+                        st.write("Segment data not currently available for this ticker.")
+
+                    st.markdown("#### 🛡️ Competitive Advantages")
+                    # This is a heuristic based on financial stability and market position
+                    market_cap = info.get('marketCap', 0)
+                    if market_cap > 200e9: # Over $200 Billion
+                        st.success("💰 **Large Cap:** Likely has strong brand recognition and economic resilience.")
+                    elif market_cap > 10e9:
+                        st.info("📈 **Mid Cap:** Potential for niche dominance and growth.")
+                    else:
+                        st.warning("⚡ **Small Cap:** High growth potential but potentially volatile business model.")
+
+                    # Key Executives (If available)
+                    st.markdown("#### 👥 Key Management")
+                    ceo_name = info.get('companyOfficers', [{}])[0].get('name', 'Data Unavailable') if info.get('companyOfficers') else 'Data Unavailable'
+                    st.write(f"**CEO:** {ceo_name}")
+
+                # Risks and Sustainability
+                st.markdown("---")
+                risk_col, esg_col = st.columns(2)
+
+                with risk_col:
+                    st.markdown("#### ⚠️ Key Risks")
+                    risk_list = info.get('riskNotes', ['Risk data not available.'])
+                    if isinstance(risk_list, list):
+                        for risk in risk_list[:3]: # Show first 3 risks
+                            st.markdown(f"- {risk}")
+                    else:
+                        st.write("Data Unavailable")
+
+                with esg_col:
+                    st.markdown("#### 🌱 Sustainability (ESG)")
+                    esg_score = info.get('totalEsg', 'N/A')
+                    if esg_score != 'N/A':
+                        st.metric("Total ESG Score", f"{esg_score}/100")
+                    else:
+                        st.write("ESG data not available.")
+                    
+                    environment_grade = info.get('environmentGrade', 'N/A')
+                    governance_grade = info.get('governanceGrade', 'N/A')
+                    st.write(f"**Env:** {environment_grade} | **Gov:** {governance_grade}")
+
+                # ==========================================
+                # 6. Raw Data Download (Original Section)
+                # ==========================================
                 with st.expander("View Raw Data"):
                     st.dataframe(df.sort_index(ascending=False))
                     csv = df.to_csv()
