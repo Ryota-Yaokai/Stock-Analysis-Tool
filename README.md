@@ -40,7 +40,7 @@ To run this project locally, you need Python installed.
     ```
 
 ### 6. Product link / Demo
--   Here is the link of app:stock-analysis-tool-bkpgfdbnpd4uwyojsfg9mm.streamlit.app
+-   Here is the link of app:https://stock-analysis-tool-bkpgfdbnpd4uwyojsfg9mm.streamlit.app/
 
 ### 7. Limitations & next steps
 -   **Limitations:** The current version relies solely on `yfinance`, which may have occasional rate limits or data delays. The technical analysis is limited to basic indicators (SMA, Bollinger Bands).
