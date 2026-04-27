@@ -208,8 +208,8 @@ if analyze_btn:
                 try:
                     m1.metric("Current Price", f"${current_price:.2f}", f"{change:.2f} ({change_pct:.2f}%)")
                     m2.metric("Market Cap", f"${info.get('marketCap', 0)/1e9:.2f}B")
-                    m3.metric("P/E Ratio", f"{info.get('trailingPE', 0):.2f}")
-                    m4.metric("52 Week High", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
+                    m3.metric("P/E Ratio", f"{info.get('trailingPE', 'N/A')}")
+                    m4.metric("52 Week High", f"${info.get('fiftyTwoWeekHigh', 'N/A'):.2f}")
                 except Exception as e:
                     st.warning("Some financial data is missing.")
 
@@ -225,79 +225,115 @@ if analyze_btn:
                 st.markdown("---")
                 st.markdown("### 🧠 Qualitative Analysis")
 
+                # Company Profile & Business
+                st.markdown("#### 🏢 Company Profile & Business Model")
                 col1, col2 = st.columns(2)
-
+                
                 with col1:
-                    st.markdown("#### 🏢 Company Overview")
-                    long_name = info.get('longName', 'N/A')
+                    st.markdown("**Basic Information**")
+                    name = info.get('longName', 'N/A')
                     sector = info.get('sector', 'N/A')
                     industry = info.get('industry', 'N/A')
                     country = info.get('country', 'N/A')
-                    
-                    st.write(f"**Name:** {long_name}")
-                    st.write(f"**Sector:** {sector}")
-                    st.write(f"**Industry:** {industry}")
-                    st.write(f"**Headquarters:** {country}")
-
-                    # Business Summary
-                    summary = info.get('longBusinessSummary', 'No description available.')
-                    # Truncate long text for the UI
-                    st.markdown(f"<div style='font-size: 0.9em; line-height: 1.5;'>{summary[:500]}{'...' if len(summary) > 500 else ''}</div>", unsafe_allow_html=True)
+                    st.write(f"- **Name:** {name}")
+                    st.write(f"- **Sector:** {sector}")
+                    st.write(f"- **Industry:** {industry}")
+                    st.write(f"- **Country:** {country}")
 
                 with col2:
-                    st.markdown("#### 📊 Business Segments")
-                    # Segment Data (If Available)
-                    seg_data = info.get('segmentData', None)
-                    if seg_data and 'segments' in seg_data:
-                        # This is a simplified approach; data structure varies
-                        st.write("Segment breakdown data available.")
-                        # Note: Yahoo Finance segment data structure is complex and varies by company.
-                        # For a stable UI, we simply indicate availability here.
-                    else:
-                        st.write("Segment data not currently available for this ticker.")
-
-                    st.markdown("#### 🛡️ Competitive Advantages")
-                    # This is a heuristic based on financial stability and market position
-                    market_cap = info.get('marketCap', 0)
-                    if market_cap > 200e9: # Over $200 Billion
-                        st.success("💰 **Large Cap:** Likely has strong brand recognition and economic resilience.")
-                    elif market_cap > 10e9:
-                        st.info("📈 **Mid Cap:** Potential for niche dominance and growth.")
-                    else:
-                        st.warning("⚡ **Small Cap:** High growth potential but potentially volatile business model.")
-
-                    # Key Executives (If available)
-                    st.markdown("#### 👥 Key Management")
-                    ceo_name = info.get('companyOfficers', [{}])[0].get('name', 'Data Unavailable') if info.get('companyOfficers') else 'Data Unavailable'
-                    st.write(f"**CEO:** {ceo_name}")
-
-                # Risks and Sustainability
-                st.markdown("---")
-                risk_col, esg_col = st.columns(2)
-
-                with risk_col:
-                    st.markdown("#### ⚠️ Key Risks")
-                    risk_list = info.get('riskNotes', ['Risk data not available.'])
-                    if isinstance(risk_list, list):
-                        for risk in risk_list[:3]: # Show first 3 risks
-                            st.markdown(f"- {risk}")
-                    else:
-                        st.write("Data Unavailable")
-
-                with esg_col:
-                    st.markdown("#### 🌱 Sustainability (ESG)")
-                    esg_score = info.get('totalEsg', 'N/A')
-                    if esg_score != 'N/A':
-                        st.metric("Total ESG Score", f"{esg_score}/100")
-                    else:
-                        st.write("ESG data not available.")
-                    
-                    environment_grade = info.get('environmentGrade', 'N/A')
-                    governance_grade = info.get('governanceGrade', 'N/A')
-                    st.write(f"**Env:** {environment_grade} | **Gov:** {governance_grade}")
+                    st.markdown("**Management & Governance**")
+                    ceo = info.get('companyOfficers', [{}])[0].get('name', 'N/A') if info.get('companyOfficers') else 'N/A'
+                    employees = info.get('fullTimeEmployees', 'N/A')
+                    st.write(f"- **CEO:** {ceo}")
+                    st.write(f"- **Employees:** {employees:,}" if isinstance(employees, int) else f"- **Employees:** {employees}")
+                
+                # Business Summary
+                summary = info.get('longBusinessSummary', 'Business summary not available.')
+                if summary != 'N/A':
+                    st.markdown(f"**Business Summary:**\n\n{summary}")
+                else:
+                    st.markdown("**Business Summary:** Not available.")
 
                 # ==========================================
-                # 6. Raw Data Download (Original Section)
+                # 6. Quantitative Analysis Module (FIXED)
+                # ==========================================
+                st.markdown("---")
+                st.markdown("### 📉 Quantitative Analysis")
+
+                # Safety check: Ensure we have enough data
+                if len(df) < 2:
+                    st.error("Insufficient data for quantitative analysis. Please select a longer date range.")
+                else:
+                    # Calculate Returns
+                    df['Returns'] = df['Close'].pct_change().dropna()
+
+                    # 1. Annualized Return
+                    total_days = len(df)
+                    # Handle division by zero if days is 0
+                    if total_days > 0:
+                        total_return = (df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1
+                        # Handle cases where the period is less than a year
+                        annualized_return = (1 + total_return) ** (252 / total_days) - 1 if total_days > 0 else 0
+                    else:
+                        annualized_return = 0
+
+                    # 2. Annualized Volatility
+                    # Check if there are enough return points
+                    if len(df['Returns'].dropna()) > 1:
+                        annualized_volatility = df['Returns'].std() * (252 ** 0.5)
+                    else:
+                        annualized_volatility = 0
+
+                    # 3. Sharpe Ratio (Assuming Risk Free Rate = 0)
+                    if annualized_volatility != 0:
+                        sharpe_ratio = annualized_return / annualized_volatility
+                    else:
+                        sharpe_ratio = float('inf') if annualized_return > 0 else 0
+
+                    # 4. Max Drawdown
+                    try:
+                        df['Cumulative_Returns'] = (1 + df['Returns']).cumprod()
+                        df['Rolling_Max'] = df['Cumulative_Returns'].cummax()
+                        df['Drawdown'] = (df['Cumulative_Returns'] - df['Rolling_Max']) / df['Rolling_Max']
+                        max_drawdown = df['Drawdown'].min()
+                    except:
+                        max_drawdown = 0
+
+                    # Display Metrics
+                    qa_col1, qa_col2, qa_col3, qa_col4 = st.columns(4)
+                    qa_col1.metric("Annualized Return", f"{annualized_return:.1%}" if annualized_return != float('inf') else "Infinity")
+                    qa_col2.metric("Annualized Volatility", f"{annualized_volatility:.1%}")
+                    qa_col3.metric("Sharpe Ratio", f"{sharpe_ratio:.2f}" if sharpe_ratio != float('inf') else "High")
+                    qa_col4.metric("Max Drawdown", f"{max_drawdown:.1%}")
+
+                    # Drawdown Chart
+                    st.markdown("#### Historical Drawdown")
+                    fig_dd = go.Figure()
+                    # Filter out NaN values for plotting
+                    valid_dd = df['Drawdown'].dropna()
+                    if not valid_dd.empty:
+                        fig_dd.add_trace(go.Scatter(
+                            x=valid_dd.index,
+                            y=valid_dd,
+                            fill='tozeroy',
+                            mode='lines',
+                            line=dict(color='#D66FD2', width=1)
+                        ))
+                    else:
+                        fig_dd.add_trace(go.Scatter(x=[], y=[], mode='lines'))
+
+                    fig_dd.update_layout(
+                        template='plotly_dark',
+                        height=250,
+                        xaxis_title="Date",
+                        yaxis_title="Drawdown %",
+                        showlegend=False,
+                        margin=dict(l=0, r=0, t=30, b=0)
+                    )
+                    st.plotly_chart(fig_dd, use_container_width=True)
+
+                # ==========================================
+                # 7. Raw Data Download (Original Section)
                 # ==========================================
                 with st.expander("View Raw Data"):
                     st.dataframe(df.sort_index(ascending=False))
